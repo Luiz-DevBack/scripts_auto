@@ -93,4 +93,4 @@ Abra um pull request.
 Este projeto está licenciado sob a Licença MIT. Consulte o arquivo LICENSE para mais detalhes.
 
 📞 Contato
-Se tiver dúvidas ou sugestões, fique à vontade para abrir uma issue no repositório ou entrar em contato via whatsapp.
+Se tiver dúvidas ou sugestões, fique à vontade para abrir uma issue no repositório ou entrar em contato via whatsapp (11) 93954-2769
