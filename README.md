@@ -35,6 +35,7 @@ atualiza o sistema, faz backup e tira uma "foto" da configuração. Tudo fica sa
 - [Menu](#menu)
 - [O que o diagnóstico verifica](#o-que-o-diagnóstico-verifica)
 - [Módulos](#módulos)
+- [Interface web](#interface-web)
 - [Linha de comando e automação](#linha-de-comando-e-automação)
 - [Relatórios](#relatórios)
 - [Segurança e cuidados](#segurança-e-cuidados)
@@ -66,6 +67,7 @@ Recomendado: `whiptail` (menus em janela; já vem no Debian/Ubuntu).
 PENDRIVE/
 └── BigBoss/
     ├── bigboos.sh       ← o script
+    ├── bigboss-web.py   ← interface web (opcional, Python 3)
     ├── README.md
     ├── pacotes/         ← .deb/.rpm para instalar offline (opcional)
     └── relatorios/      ← criada sozinha: <host>_<data>/diagnostico.txt|.html, snapshot/, backups/
@@ -185,6 +187,52 @@ Instala com um clique as ferramentas úteis que faltam (lista abaixo) · instala
 
 ---
 
+## Interface web
+
+`bigboss-web.py` abre as mesmas funções no navegador: cards por área, campos para host/pasta/
+portas, **saída ao vivo** com cores, botão **Parar**, semáforo do resultado e link para o
+relatório HTML. No topo, CPU, memória, disco, carga e tempo ligado atualizam a cada 4 s.
+
+```bash
+sudo python3 /media/$USER/PENDRIVE/BigBoss/bigboss-web.py           # só esta máquina
+sudo python3 /media/$USER/PENDRIVE/BigBoss/bigboss-web.py --rede    # acessar do notebook pela rede
+```
+
+O terminal mostra a URL com a **chave de acesso** (ex.: `https://192.168.0.210:8765/?t=…`). Abra no
+navegador; o certificado é temporário, então aceite o aviso ("Avançado › Continuar").
+
+Servidor sem `--rede`? Use um túnel SSH a partir do notebook:
+`ssh -L 8765:127.0.0.1:8765 usuario@servidor` e abra a URL mostrada.
+
+| Opção | Efeito |
+|-------|--------|
+| `--rede` | escuta em todas as interfaces (padrão: só `127.0.0.1`) |
+| `--ip 192.168.0.210` | escuta só nesse IP |
+| `--porta 8765` | porta (se ocupada, tenta as 9 seguintes) |
+| `--inativo 60` | desliga sozinho após N minutos sem uso (`0` = nunca) |
+| `--sem-https` | HTTP puro — só em rede confiável ou por túnel |
+| `--relatorios PASTA` | onde salvar os relatórios |
+
+**Como ela se protege** (é uma página que executa coisas na máquina, então é rígida):
+
+- **Só ações fixas.** Cada botão chama uma ação pré-definida do `bigboos.sh` (`--web <ação>`); cada
+  campo é validado (host, porta, caminho sem `..`, números, itens de lista). Não existe campo de
+  "comando livre" e nada passa por shell.
+- **Chave aleatória por execução**, guardada em cookie `HttpOnly`/`SameSite=Strict`; toda chamada à
+  API exige também o cabeçalho com a chave (bloqueia CSRF). Sem a chave: 401.
+- **HTTPS** com certificado temporário gerado na hora (precisa de `openssl`; apagado ao sair).
+- Aceita só `Host` que seja IP, `localhost` ou o nome da máquina (bloqueia *DNS rebinding*).
+- **Uma ação por vez**, confirmação em tela para tudo que altera o sistema, botão Parar que encerra
+  o grupo de processos inteiro.
+- **Auditoria** em `relatorios/web-auditoria.log` (quem, qual ação, parâmetros, resultado).
+- Desliga sozinho após 60 min sem uso; Ctrl+C encerra na hora.
+
+Requisitos: Python 3.6+ (só biblioteca padrão — já vem no Ubuntu e no Debian padrão). Rode com
+`sudo` para liberar SMART, limpeza, atualizações e a auditoria completa; sem root a página avisa e
+pula o que é protegido. Agendamento de backup no cron fica só no menu do terminal, de propósito.
+
+---
+
 ## Linha de comando e automação
 
 ```bash
@@ -274,6 +322,7 @@ O BigBoss funciona sem elas, mas fica mais completo (todas instaláveis pelo men
 ```
 scripts_auto/
 ├── bigboos.sh            # BigBoss v2
+├── bigboss-web.py        # interface web (Python 3, só biblioteca padrão)
 ├── legado/
 │   └── bigboos_v1.sh     # versão 1 (menu original), mantida como referência
 ├── README.md

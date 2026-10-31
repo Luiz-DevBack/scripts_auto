@@ -40,6 +40,7 @@ FILHOS=()
 # ─── Argumentos ──────────────────────────────────────────────────────────────
 ACAO=""; FORCAR_TEXTO=0; SEM_COR=0
 BK_ORIG=""; BK_DEST=""; BK_MANTER=7
+WEB_ACAO=""; WEB_RESP=(); RESP_WEB=""
 
 ajuda() {
   cat <<EOF
@@ -74,11 +75,16 @@ while [ $# -gt 0 ]; do
     --sem-cor)       SEM_COR=1 ;;
     -v|--versao)     echo "BigBoss v$VERSAO"; exit 0 ;;
     -h|--ajuda|--help) ajuda; exit 0 ;;
+    --web)           # usado pelo bigboss-web.py: --web AÇÃO [respostas…] (sempre o último argumento)
+                     ACAO="web"; WEB_ACAO="${2:-}"; shift 2 2>/dev/null || shift; WEB_RESP=("$@"); break ;;
     *) echo "Opção desconhecida: $1 (veja --ajuda)" >&2; exit 64 ;;
   esac
   shift
 done
-[ -n "$ACAO" ] && MODO="cli"
+if [ "$ACAO" = web ]; then MODO="web"; SEM_COR=1; elif [ -n "$ACAO" ]; then MODO="cli"; fi
+
+# no modo web as respostas das perguntas chegam prontas, na ordem, pelos argumentos
+_proxima_resposta() { RESP_WEB="${WEB_RESP[0]:-}"; [ ${#WEB_RESP[@]} -gt 0 ] && WEB_RESP=("${WEB_RESP[@]:1}"); return 0; }
 
 # ─── Cores e saída ───────────────────────────────────────────────────────────
 if [ -t 1 ] && [ "$SEM_COR" = 0 ] && [ -z "${NO_COLOR:-}" ]; then
@@ -166,6 +172,7 @@ _tam() {
 menu() {
   local titulo=$1 texto=$2; shift 2
   ESCOLHA=""
+  if [ "$MODO" = web ]; then _proxima_resposta; ESCOLHA=${RESP_WEB:-$1}; return 0; fi
   if [ "$UI" = whiptail ]; then
     _tam
     local n=$(( $# / 2 )) h
@@ -190,6 +197,7 @@ menu() {
 
 confirmar() {
   if [ "$MODO" = cli ]; then return 1; fi
+  if [ "$MODO" = web ]; then return 0; fi   # a página já pediu confirmação antes de disparar
   local msg; msg=$(printf '%b' "$1")
   if [ "$UI" = whiptail ]; then
     _tam; whiptail --title " Confirmar " --yes-button "Sim" --no-button "Não" --yesno "$msg" 14 "$LARG"
@@ -202,6 +210,7 @@ confirmar() {
 # perguntar "texto" "padrão" → RESPOSTA
 perguntar() {
   RESPOSTA=""
+  if [ "$MODO" = web ]; then _proxima_resposta; RESPOSTA=${RESP_WEB:-${2:-}}; return 0; fi
   if [ "$UI" = whiptail ]; then
     _tam
     RESPOSTA=$(whiptail --title " BigBoss " --ok-button "OK" --cancel-button "Cancelar" \
@@ -216,6 +225,12 @@ perguntar() {
 marcar() {
   local titulo=$1 texto=$2; shift 2
   MARCADOS=()
+  if [ "$MODO" = web ]; then   # resposta = itens separados por vírgula; só vale o que existe na lista
+    _proxima_resposta
+    local pedido=",$RESP_WEB,"
+    while [ $# -gt 0 ]; do [[ "$pedido" == *",$1,"* ]] && MARCADOS+=("$1"); shift 3; done
+    return 0
+  fi
   if [ "$UI" = whiptail ]; then
     _tam
     local n=$(( $# / 3 )) h res
@@ -246,7 +261,7 @@ garantir_root() {   # garantir_root "motivo"
   if [ "$(id -u)" -eq 0 ]; then PODE_ROOT=1; PREFIXO_ROOT=(); return 0; fi
   tem sudo || return 1
   if sudo -n true 2>/dev/null; then PODE_ROOT=1; PREFIXO_ROOT=(sudo -n); return 0; fi
-  [ "$MODO" = cli ] && return 1
+  [ "$MODO" != menu ] && return 1
   echo
   printf '  %s%s precisa de root para ficar completo.%s\n' "$C_Y" "${1:-Isto}" "$C_N"
   if sudo -v; then PODE_ROOT=1; PREFIXO_ROOT=(sudo -n); return 0; fi
@@ -382,6 +397,7 @@ fechar_relatorio() {   # fechar_relatorio "Título"
   rm -f "$corpo"
   resumo_tela
   printf '\n  %s📄 Relatório:%s %s\n               %s\n' "$C_G" "$C_N" "$LOG" "$html"
+  [ "$MODO" = web ] && printf '@@RELATORIO %s\n' "$html"
   LOG=""
 }
 
@@ -717,7 +733,7 @@ rede_rota() {
 rede_descobrir() {
   tem ping || { crit "ping não disponível"; return; }
   local -a ifs=()
-  mapfile -t ifs < <(ip -o -4 addr show scope global 2>/dev/null | awk '{print $2" "$4}')
+  mapfile -t ifs < <(ip -o -4 addr show scope global 2>/dev/null | awk '$2 !~ /^(veth|br-|docker|virbr|cni|flannel)/ {print $2" "$4}')
   [ ${#ifs[@]} -eq 0 ] && { crit "nenhuma interface com IPv4"; return; }
   local alvo=${ifs[0]}
   if [ ${#ifs[@]} -gt 1 ]; then
@@ -1002,6 +1018,42 @@ limpeza() {
 # ═════════════════════════════════════════════════════════════════════════════
 apt_ni() { rodar_root "$1" env DEBIAN_FRONTEND=noninteractive apt-get -y -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold "${@:2}"; }
 
+atu_lista() {
+  garantir_root "Atualizar a lista" || { crit "precisa de root"; return 1; }
+  secao "ATUALIZAÇÕES PENDENTES"
+  case "$PKG" in
+    apt) rodar_root "apt-get update" apt-get update; sub "Pendentes"; apt list --upgradable 2>/dev/null | tail -n +2 | bloco
+         kv "Total" "$(apt list --upgradable 2>/dev/null | tail -n +2 | wc -l) pacote(s), $(apt list --upgradable 2>/dev/null | grep -c -- '-security') de segurança" ;;
+    *)   rodar_root "check-update" "$PKG" check-update ;;
+  esac
+}
+
+atu_instalar() {   # atu_instalar upgrade|full-upgrade
+  local tipo=${1:-upgrade}
+  garantir_root "Instalar atualizações" || { crit "precisa de root"; return 1; }
+  confirmar "Rodar $PKG $tipo agora?\n\nArquivos de configuração alterados por você são mantidos.\nServiços podem reiniciar durante a atualização." || return 0
+  abrir_relatorio "atualizacao"
+  secao "ATUALIZAÇÃO ($tipo)"
+  case "$PKG" in
+    apt) rodar_root "apt-get update" apt-get update; apt_ni "apt-get $tipo" "$tipo" ;;
+    dnf|yum) rodar_root "$PKG upgrade" "$PKG" -y upgrade ;;
+    zypper) rodar_root "zypper update" zypper -n update ;;
+    apk) rodar_root "apk upgrade" apk upgrade ;;
+  esac
+  [ -f /var/run/reboot-required ] && aviso "reinicialização necessária para concluir"
+  fechar_relatorio "Atualização"
+}
+
+atu_reboot() {
+  secao "REINICIALIZAÇÃO"
+  if [ -f /var/run/reboot-required ]; then aviso "sim — $(cat /var/run/reboot-required.pkgs 2>/dev/null | tr '\n' ' ')"
+  elif tem needs-restarting; then R needs-restarting -r 2>&1 | bloco
+  else ok "nenhum aviso de reinicialização pendente"; fi
+  kv "Kernel rodando" "$(uname -r)"
+  if [ "$PKG" = apt ]; then kv "Kernel mais novo instalado" "$(ls -1 /boot/vmlinuz-* 2>/dev/null | sed 's#.*/vmlinuz-##' | sort -V | tail -1)"; fi
+  info "reboot de servidor/roteador: avise quem usa e faça você mesmo — o BigBoss nunca reinicia sozinho"
+}
+
 menu_atualizacoes() {
   [ -n "$PKG" ] || { crit "gerenciador de pacotes não identificado"; pausa; return; }
   while :; do
@@ -1013,34 +1065,10 @@ menu_atualizacoes() {
       0 "Voltar" || return
     LOG=""
     case "$ESCOLHA" in
-      1) garantir_root "Atualizar a lista" || { crit "precisa de root"; pausa; continue; }
-         secao "ATUALIZAÇÕES PENDENTES"
-         case "$PKG" in
-           apt) rodar_root "apt-get update" apt-get update; sub "Pendentes"; apt list --upgradable 2>/dev/null | tail -n +2 | bloco
-                kv "Total" "$(apt list --upgradable 2>/dev/null | tail -n +2 | wc -l) pacote(s), $(apt list --upgradable 2>/dev/null | grep -c -- '-security') de segurança" ;;
-           *)   rodar_root "check-update" "$PKG" check-update ;;
-         esac ;;
-      2|3)
-         garantir_root "Instalar atualizações" || { crit "precisa de root"; pausa; continue; }
-         local tipo=upgrade; [ "$ESCOLHA" = 3 ] && tipo="full-upgrade"
-         confirmar "Rodar $PKG $tipo agora?\n\nArquivos de configuração alterados por você são mantidos.\nServiços podem reiniciar durante a atualização." || continue
-         abrir_relatorio "atualizacao"
-         secao "ATUALIZAÇÃO ($tipo)"
-         case "$PKG" in
-           apt) rodar_root "apt-get update" apt-get update; apt_ni "apt-get $tipo" "$tipo" ;;
-           dnf|yum) rodar_root "$PKG upgrade" "$PKG" -y upgrade ;;
-           zypper) rodar_root "zypper update" zypper -n update ;;
-           apk) rodar_root "apk upgrade" apk upgrade ;;
-         esac
-         [ -f /var/run/reboot-required ] && aviso "reinicialização necessária para concluir"
-         fechar_relatorio "Atualização" ;;
-      4) secao "REINICIALIZAÇÃO"
-         if [ -f /var/run/reboot-required ]; then aviso "sim — $(cat /var/run/reboot-required.pkgs 2>/dev/null | tr '\n' ' ')"
-         elif tem needs-restarting; then R needs-restarting -r 2>&1 | bloco
-         else ok "nenhum aviso de reinicialização pendente"; fi
-         kv "Kernel rodando" "$(uname -r)"
-         if [ "$PKG" = apt ]; then kv "Kernel mais novo instalado" "$(ls -1 /boot/vmlinuz-* 2>/dev/null | sed 's#.*/vmlinuz-##' | sort -V | tail -1)"; fi
-         info "reboot de servidor/roteador: avise quem usa e faça você mesmo — o BigBoss nunca reinicia sozinho" ;;
+      1) atu_lista ;;
+      2) atu_instalar upgrade ;;
+      3) atu_instalar full-upgrade ;;
+      4) atu_reboot ;;
       0) return ;;
     esac
     pausa
@@ -1524,6 +1552,47 @@ if [ "$MODO" = cli ]; then
                echo "[$(date '+%F %T')] backup $BK_ORIG → $BK_DEST (manter $BK_MANTER)"
                backup_pasta "$BK_ORIG" "$BK_DEST" "$BK_MANTER" || exit 1 ;;
   esac
+  exit 0
+fi
+
+# ─── Modo web: chamado pelo bigboss-web.py com uma ação da lista fixa ─────────
+if [ "$MODO" = web ]; then
+  garantir_root "A interface web" >/dev/null 2>&1
+  [ "$PODE_ROOT" = 1 ] || info "a interface web está rodando sem root: ações protegidas serão puladas (inicie com sudo)"
+  case "$WEB_ACAO" in
+    diag)             diag_completo ;;
+    rede)             abrir_relatorio rede; diag_rede_resumo; fechar_relatorio "Rede" ;;
+    porta)            rede_porta ;;
+    rota)             rede_rota ;;
+    dns)              rede_dns ;;
+    mtu)              rede_mtu ;;
+    velocidade)       rede_velocidade ;;
+    descobrir)        rede_descobrir ;;
+    portas)           secao "PORTAS ESCUTANDO"; if [ "$PODE_ROOT" = 1 ]; then rodar_root "" ss -tulpn; else rodar "" ss -tuln; fi ;;
+    disco-uso)        diag_disco; sub "Inodes"; df -hi "${_filtros_df[@]}" 2>/dev/null | bloco ;;
+    disco-maiores)    disco_maiores ;;
+    disco-velocidade) disco_velocidade ;;
+    smart)            secao "SMART"; diag_smart ;;
+    discos)           secao "DISCOS"; rodar "" lsblk -o NAME,SIZE,TYPE,FSTYPE,LABEL,UUID,MOUNTPOINT; rodar "fstab" cat /etc/fstab ;;
+    limpeza-estimar)  limpeza_estimar ;;
+    limpeza)          limpeza ;;
+    atu-lista)        atu_lista ;;
+    atu-upgrade)      atu_instalar upgrade ;;
+    atu-full)         atu_instalar full-upgrade ;;
+    atu-reboot)       atu_reboot ;;
+    seguranca)        seguranca ;;
+    bench-cpu)        bench_cpu ;;
+    bench-mem)        bench_memoria ;;
+    estresse)         bench_estresse ;;
+    snapshot)         snapshot ;;
+    backup)           _proxima_resposta; o=$RESP_WEB; _proxima_resposta; de=$RESP_WEB; _proxima_resposta
+                      secao "BACKUP"; backup_pasta "$o" "$de" "${RESP_WEB:-7}" ;;
+    ferramentas)      _proxima_resposta; _validos=" curl smartmontools sysstat htop ncdu iperf3 mtr dnsutils lsof tcpdump ethtool lm-sensors sysbench stress-ng nmap whiptail "
+                      _pk=(); for _n in ${RESP_WEB//,/ }; do [[ "$_validos" == *" $_n "* ]] && _pk+=("$(nome_pacote "$_n")"); done
+                      if [ ${#_pk[@]} -gt 0 ]; then secao "INSTALAÇÃO"; instalar_pacotes "${_pk[@]}"; else crit "nenhuma ferramenta válida"; fi ;;
+    *)                crit "ação desconhecida: $WEB_ACAO"; exit 64 ;;
+  esac
+  printf '@@FIM criticos=%d avisos=%d\n' "${#CRITICOS[@]}" "${#AVISOS[@]}"
   exit 0
 fi
 
