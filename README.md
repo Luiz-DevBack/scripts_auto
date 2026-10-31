@@ -35,7 +35,7 @@ atualiza o sistema, faz backup e tira uma "foto" da configuração. Tudo fica sa
 - [Menu](#menu)
 - [O que o diagnóstico verifica](#o-que-o-diagnóstico-verifica)
 - [Módulos](#módulos)
-- [Interface web](#interface-web)
+- [Interface web](#interface-web) — passo a passo, segurança, problemas comuns
 - [Linha de comando e automação](#linha-de-comando-e-automação)
 - [Relatórios](#relatórios)
 - [Segurança e cuidados](#segurança-e-cuidados)
@@ -189,20 +189,111 @@ Instala com um clique as ferramentas úteis que faltam (lista abaixo) · instala
 
 ## Interface web
 
-`bigboss-web.py` abre as mesmas funções no navegador: cards por área, campos para host/pasta/
-portas, **saída ao vivo** com cores, botão **Parar**, semáforo do resultado e link para o
-relatório HTML. No topo, CPU, memória, disco, carga e tempo ligado atualizam a cada 4 s.
+`bigboss-web.py` mostra as mesmas funções no navegador, para quem prefere clicar em vez de usar o
+menu do terminal. Ao clicar num botão, a ação **roda na máquina onde o servidor web foi iniciado**,
+e a saída aparece ao vivo na página.
+
+### Passo a passo
+
+1. **No servidor** (pelo console ou por SSH), inicie a interface:
+
+   ```bash
+   cd /media/$USER/PENDRIVE/BigBoss        # ou a pasta onde estão os arquivos
+   sudo python3 bigboss-web.py --rede
+   ```
+
+2. O terminal mostra o endereço com a **chave de acesso**:
+
+   ```
+     BIGBOSS WEB v2.0.0 — ubntwebsrv
+     root ✔
+
+     Abra no navegador (a chave vale só nesta execução):
+       https://192.168.0.210:8765/?t=ZxT0Mz6YxTuldHIzUfUuMwDA
+
+     O certificado é temporário: o navegador vai avisar — clique em 'Avançado' › 'Continuar'.
+     Relatórios: /home/magiccomp/BigBoss/relatorios
+     Ctrl+C para encerrar. Desliga sozinho após 60 min sem uso.
+   ```
+
+3. **No notebook**, abra esse endereço completo, incluindo o `?t=…`. Ele começa com **`https://`**
+   (com `http://` não abre). O navegador avisa que o certificado não é confiável; é esperado, porque
+   o certificado é gerado na hora. Clique em **Avançado › Continuar para 192.168.0.210**.
+4. Depois do primeiro acesso, a chave fica num cookie e some da barra de endereço. Para usar em
+   outro navegador ou no celular, abra a URL completa de novo.
+5. **Para desligar:** Ctrl+C no terminal. Pelo SSH, `sudo pkill -f '[b]igboss-web'`. Ele também
+   desliga sozinho após 60 min sem uso. Cada vez que o servidor sobe, ele gera **uma chave nova**,
+   e o link antigo deixa de valer.
+
+### Deixar rodando depois de fechar o SSH
+
+Por padrão a interface fecha junto com a sessão SSH. Para deixá-la rodando sem terminal aberto:
 
 ```bash
-sudo python3 /media/$USER/PENDRIVE/BigBoss/bigboss-web.py           # só esta máquina
-sudo python3 /media/$USER/PENDRIVE/BigBoss/bigboss-web.py --rede    # acessar do notebook pela rede
+cd ~/BigBoss && sudo setsid nohup python3 bigboss-web.py --rede > web.out 2>&1 < /dev/null &
+sleep 3; cat web.out          # mostra a URL com a chave
 ```
 
-O terminal mostra a URL com a **chave de acesso** (ex.: `https://192.168.0.210:8765/?t=…`). Abra no
-navegador; o certificado é temporário, então aceite o aviso ("Avançado › Continuar").
+Ela continua respeitando o desligamento por inatividade (`--inativo 0` desativa; não é recomendado).
 
-Servidor sem `--rede`? Use um túnel SSH a partir do notebook:
-`ssh -L 8765:127.0.0.1:8765 usuario@servidor` e abra a URL mostrada.
+### Sem abrir porta na rede: túnel SSH
+
+Se não quiser expor a porta (servidor de cliente, rede desconhecida), rode **sem** `--rede`. Assim a
+interface só aceita conexões da própria máquina. Do notebook, abra um túnel e use o endereço local:
+
+```bash
+# no servidor
+sudo python3 bigboss-web.py
+# no notebook (PowerShell ou terminal)
+ssh -L 8765:127.0.0.1:8765 usuario@192.168.0.210
+# navegador do notebook: https://127.0.0.1:8765/?t=<chave mostrada no servidor>
+```
+
+### O que tem na página
+
+- **Barra superior:** CPU, memória, disco `/`, carga e tempo ligado, atualizando a cada 4 s, com o
+  nome da máquina e o aviso "sem root" quando for o caso.
+- **Menu lateral** com as mesmas áreas do terminal. Cada ação é um card com os campos dela:
+
+| Área | Ações (id usado na API) | Campos |
+|------|-------------------------|--------|
+| Diagnóstico | Diagnóstico completo (`diag`) | — |
+| Rede | Resumo (`rede`) · Testar portas (`porta`) · Rota (`rota`) · DNS (`dns`) · MTU (`mtu`) · Velocidade da internet (`velocidade`) · Descobrir hosts (`descobrir`) · Portas abertas nesta máquina (`portas`) | host, lista de portas, nome a resolver, interface |
+| Disco | Uso e inodes (`disco-uso`) · Maiores pastas/arquivos (`disco-maiores`) · Velocidade (`disco-velocidade`) · SMART (`smart`) · Discos e fstab (`discos`) | pasta |
+| Limpeza | Estimar (`limpeza-estimar`, só lê) · Limpar (`limpeza`) | itens marcáveis, tamanho do journal |
+| Atualizações | Ver pendentes (`atu-lista`) · upgrade (`atu-upgrade`) · full-upgrade (`atu-full`) · Precisa reiniciar? (`atu-reboot`) | — |
+| Segurança | Auditoria rápida (`seguranca`) | — |
+| Benchmark | CPU (`bench-cpu`) · Memória (`bench-mem`) · Estresse (`estresse`) | minutos |
+| Backup | Snapshot de configuração (`snapshot`) · Backup de pasta (`backup`) | origem, destino, cópias a manter |
+| Pacotes | Instalar ferramentas que faltam (`ferramentas`) | itens marcáveis |
+| Relatórios | lista os relatórios salvos e abre o `.html` direto no navegador | — |
+
+- **Painel de saída:** a saída aparece colorida enquanto a ação roda, com cronômetro e botão
+  **Parar**. No fim, mostra o semáforo (✔ ok / ▲ avisos / ✖ críticos) e o link para o relatório HTML.
+- Ações que **alteram ou pesam no sistema** pedem confirmação antes de rodar: limpeza, upgrade,
+  full-upgrade, instalar ferramentas, backup, estresse, velocidade do disco (grava 1 GB) e descobrir
+  hosts (ping na rede inteira).
+- Layout responsivo: funciona no celular.
+
+### Como funciona por dentro
+
+```
+navegador ──HTTPS──► bigboss-web.py ──subprocess (sem shell)──► bash bigboos.sh --web <ação> <args>
+   ▲                       │
+   └──── saída ao vivo ◄───┘  (consulta a cada 0,7 s; @@RELATORIO e @@FIM marcam relatório e resultado)
+```
+
+- O Python **não executa comandos próprios**: ele só chama `bigboos.sh --web <ação>` com os
+  argumentos já validados. No modo `--web`, as perguntas do script (perguntar/menu/marcar) usam os
+  argumentos recebidos, e as confirmações são respondidas "sim", porque a confirmação já foi feita
+  na página.
+- Cada ação roda num **grupo de processos próprio**. Por isso o Parar encerra também os filhos
+  (`stress`, `dd`, `apt`…).
+- No fim, o script imprime `@@RELATORIO <arquivo.html>` e `@@FIM criticos=N avisos=M`, que a página
+  usa para o semáforo e o link.
+- Os relatórios vão para a mesma pasta `relatorios/` do modo terminal.
+
+### Opções
 
 | Opção | Efeito |
 |-------|--------|
@@ -213,23 +304,66 @@ Servidor sem `--rede`? Use um túnel SSH a partir do notebook:
 | `--sem-https` | HTTP puro — só em rede confiável ou por túnel |
 | `--relatorios PASTA` | onde salvar os relatórios |
 
-**Como ela se protege** (é uma página que executa coisas na máquina, então é rígida):
+### Como ela se protege
+
+É uma página que executa coisas na máquina, então as regras são rígidas:
 
 - **Só ações fixas.** Cada botão chama uma ação pré-definida do `bigboos.sh` (`--web <ação>`); cada
   campo é validado (host, porta, caminho sem `..`, números, itens de lista). Não existe campo de
   "comando livre" e nada passa por shell.
 - **Chave aleatória por execução**, guardada em cookie `HttpOnly`/`SameSite=Strict`; toda chamada à
   API exige também o cabeçalho com a chave (bloqueia CSRF). Sem a chave: 401.
-- **HTTPS** com certificado temporário gerado na hora (precisa de `openssl`; apagado ao sair).
+- **HTTPS** com certificado temporário gerado na hora (precisa de `openssl`). Os arquivos do
+  certificado são apagados do disco logo depois de carregados na memória, então não sobra chave
+  privada em `/tmp`, nem se o processo for morto.
 - Aceita só `Host` que seja IP, `localhost` ou o nome da máquina (bloqueia *DNS rebinding*).
 - **Uma ação por vez**, confirmação em tela para tudo que altera o sistema, botão Parar que encerra
   o grupo de processos inteiro.
 - **Auditoria** em `relatorios/web-auditoria.log` (quem, qual ação, parâmetros, resultado).
-- Desliga sozinho após 60 min sem uso; Ctrl+C encerra na hora.
+- Desliga sozinho após 60 min sem uso. Ctrl+C, `kill`/`pkill` (SIGTERM) ou a queda do SSH
+  encerram na hora, param a ação que estiver rodando e registram o fim na auditoria.
 
-Requisitos: Python 3.6+ (só biblioteca padrão — já vem no Ubuntu e no Debian padrão). Rode com
-`sudo` para liberar SMART, limpeza, atualizações e a auditoria completa; sem root a página avisa e
-pula o que é protegido. Agendamento de backup no cron fica só no menu do terminal, de propósito.
+**Verificado no .210 (Ubuntu 24.04):**
+- sem chave ou com chave errada → 401;
+- `Host` falso → 421;
+- injeção no host (`1.1.1.1;id`) → recusada;
+- `../` nos relatórios → 404;
+- segunda ação simultânea → 409;
+- Parar não deixa processo órfão;
+- acesso pelo navegador do notebook via `--rede` funcionando.
+
+Exemplo de `relatorios/web-auditoria.log`:
+
+```
+2026-10-31 14:50:14  inicio   -                  https://0.0.0.0:8765
+2026-10-31 14:52:18  login    -                  192.168.0.1
+2026-10-31 14:53:02  executar porta              192.168.0.1 192.168.0.7 22 3389
+2026-10-31 14:53:05  fim      porta              rc=0 3s
+2026-10-31 15:40:11  fim-web  -
+```
+
+O IP registrado é o de quem acessou, visto pelo servidor. Pela VPN, aparece o IP do gateway.
+
+### Requisitos e limites
+
+- Python 3.6+, só biblioteca padrão (já vem no Ubuntu e no Debian padrão). `openssl` para o HTTPS.
+- Rode com `sudo` para liberar SMART, limpeza, atualizações e a auditoria completa. Sem root, a
+  página avisa e pula o que é protegido.
+- O agendamento de backup no cron fica só no menu do terminal, de propósito: a web não cria tarefa
+  permanente na máquina.
+- Uma ação por vez. Se outra for disparada enquanto uma roda, ela é recusada (409) até a primeira terminar ou ser parada.
+
+### Problemas comuns da interface web
+
+| Sintoma | Causa / solução |
+|---------|-----------------|
+| `ERR_CONNECTION_REFUSED` | o servidor não está rodando (desligou por inatividade, Ctrl+C ou o SSH fechou). Inicie de novo e use a **URL nova** |
+| Abre, mas só mostra "BigBoss: acesso negado." (401) | chave velha ou ausente. Abra a URL completa com `?t=…` mostrada na execução atual |
+| Funciona no servidor, mas não pelo notebook | iniciado sem `--rede` (só escuta em 127.0.0.1). Use `--rede` ou o túnel SSH. Com firewall ativo: `sudo ufw allow from 192.168.0.0/24 to any port 8765 proto tcp` |
+| `ERR_EMPTY_RESPONSE` / página não carrega | abriu com `http://`. O endereço é `https://` |
+| "Sua conexão não é particular" | certificado temporário. Clique em Avançado › Continuar |
+| Porta diferente de 8765 | a 8765 estava ocupada e ele pegou a próxima livre. Use a URL que o terminal mostrar |
+| Ações aparecem como "precisa de root" | iniciado sem `sudo` |
 
 ---
 

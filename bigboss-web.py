@@ -21,6 +21,7 @@ import os
 import re
 import secrets
 import shutil
+import signal
 import socket
 import socketserver
 import ssl
@@ -667,6 +668,8 @@ def main():
             HTTPS = True
         else:
             print("  ! openssl não encontrado: usando HTTP (use só em rede confiável ou por túnel SSH)")
+    # o certificado já está na memória: apaga a chave do disco agora (não sobra nem com kill -9)
+    shutil.rmtree(tmp, ignore_errors=True)
     esquema = "https" if HTTPS else "http"
     porta = srv.server_address[1]
 
@@ -696,6 +699,14 @@ def main():
                 srv.shutdown()
                 return
     threading.Thread(target=vigia, daemon=True).start()
+
+    def encerrar(*_):
+        raise KeyboardInterrupt
+    # kill/pkill/systemctl e queda do SSH encerram igual ao Ctrl+C (para a tarefa e registra);
+    # com nohup o SIGHUP vem ignorado e continua assim
+    signal.signal(signal.SIGTERM, encerrar)
+    if signal.getsignal(signal.SIGHUP) != signal.SIG_IGN:
+        signal.signal(signal.SIGHUP, encerrar)
     auditar("inicio", "-", "%s://%s:%d" % (esquema, ip, porta))
     try:
         srv.serve_forever()
